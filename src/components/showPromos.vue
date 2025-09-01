@@ -288,14 +288,38 @@ export default {
     fetchItem() {
       axios.get('http://localhost:8082/showPromos')
           .then((response) => {
-            this.item = response.data || [];
-            // 初始化选中第一个商品
-            if (this.item.length > 0) {
-              this.selectItem(this.item[0]);
-            } else {
-              this.selectedItem = {};
-              this.resetTimers();
+            const promoList = response.data || [];
+            // 若没有促销数据，直接返回
+            if (promoList.length === 0) {
+              this.item = [];
+              return;
             }
+            // 批量请求每个促销对应的商品详情
+            Promise.all(
+                promoList.map(promo =>
+                    this.fetchProductDetail(promo.itemId) // 复用现有fetchProductDetail方法
+                        .then(res => ({
+                          // 合并促销信息和商品信息
+                          promoId: promo.id,
+                          promoName: promo.promoName,
+                          startDate: promo.startDate,
+                          endDate: promo.endDate,
+                          promoItemPrice: promo.promoItemPrice,
+                          // 商品详情字段（从/item/detail接口返回的res.data中获取）
+                          id: res.data.id,
+                          title: res.data.title,
+                          imgUrl: res.data.imgUrl,
+                          price: res.data.price,
+                          stock: res.data.stock, // 提前获取库存，减少后续请求（可选）
+                          sales: res.data.sales  // 提前获取销量（可选）
+                        }))
+                )
+            ).then(mergedList => {
+              this.item = mergedList; // 合并后的数据用于渲染左侧列表
+              if (this.item.length > 0) {
+                this.selectItem(this.item[0]);
+              }
+            });
           })
           .catch((error) => {
             console.error(`获取「${this.currentCategory}」商品失败：`, error);
@@ -311,7 +335,14 @@ export default {
 
     // 选中商品（加载详情+启动定时器）
     selectItem(product) {
-      this.resetTimers(); // 清除旧定时器
+      this.resetTimers();
+      // 若product中已包含stock、sales等详情字段，直接赋值（无需再请求）
+      if (product.stock !== undefined && product.sales !== undefined) {
+        this.selectedItem = product;
+        this.startTimers();
+        this.buyQuantity = 1;
+        return;
+      }
       this.fetchProductDetail(product.id)
           .then((response) => {
             // 适配后端ItemDetailDTO的数据结构
